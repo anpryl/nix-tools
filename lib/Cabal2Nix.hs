@@ -11,6 +11,7 @@ import Distribution.Pretty (pretty)
 import Distribution.Utils.ShortText (fromShortText)
 import Distribution.Utils.Path (getSymbolicPath)
 import Data.Char (toUpper)
+import Data.List (isPrefixOf)
 import System.FilePath
 import Data.ByteString (ByteString)
 import Data.Maybe (catMaybes, maybeToList)
@@ -60,12 +61,13 @@ data Src
   | Git String String (Maybe String) (Maybe String)
   deriving Show
 
-pkgs, hsPkgs, errorHandler, pkgconfPkgs, flags :: Text
+pkgs, hsPkgs, errorHandler, pkgconfPkgs, flags, builtins :: Text
 pkgs   = "pkgs"
 hsPkgs = "hsPkgs"
 errorHandler = "errorHandler"
 pkgconfPkgs = "pkgconfPkgs"
 flags  = "flags"
+builtins = "builtins"
 
 buildDepError, sysDepError, pkgConfDepError, exeDepError, legacyExeDepError, buildToolDepError, setupDepError :: Text
 buildDepError = "buildDepError"
@@ -236,20 +238,23 @@ srcToNix pi' (PrivateHackage url)
       ])
     ]
 srcToNix _ (Git url rev mbSha256 mbPath)
-  = mkNonRecSet $
-    [ "src" $= applyMkDefault (mkSym pkgs @. "fetchgit" @@ mkNonRecSet
-      [ "url"    $= mkStr (fromString url)
-      , "rev"    $= mkStr (fromString rev)
-      , "sha256" $= case mbSha256 of
-                      Just sha256 -> mkStr (fromString sha256)
-                      Nothing     -> mkNull
-      ]) $// mkNonRecSet
-      [ "url"    $= mkStr (fromString url)
-      , "rev"    $= mkStr (fromString rev)
-      , "sha256" $= case mbSha256 of
-                      Just sha256 -> mkStr (fromString sha256)
-                      Nothing     -> mkNull
-      ]
+  = let urlWithRev =
+          [ "url" $= mkStr (fromString url)
+          , "rev" $= mkStr (fromString rev)
+          ]
+        sha256Val =
+          case mbSha256 of
+            Just sha256 -> mkStr (fromString sha256)
+            Nothing -> mkNull
+        urlWithRevWithSha256 = urlWithRev <> [ "sha256" $= sha256Val ]
+        pkgsFetchGit = mkSym pkgs @. "fetchgit" @@ mkNonRecSet urlWithRevWithSha256
+        builtinsFetchGit = mkSym builtins @. "fetchGit" @@ mkNonRecSet urlWithRev
+        gitFetchSrc =
+          if "git@" `isPrefixOf` url
+          then builtinsFetchGit
+          else pkgsFetchGit
+     in mkNonRecSet $
+    [ "src" $= applyMkDefault gitFetchSrc $// mkNonRecSet urlWithRevWithSha256
     ] <>
     [ "postUnpack"
       $= mkStr (fromString $ "sourceRoot+=/" <> root <> "; echo source root reset to $sourceRoot")
